@@ -22,66 +22,43 @@ Also verify `[mcu] serial` matches the actual device on your machine (`ls /dev/s
 
 ## Shaper calibration
 
-`SHAPER_CALIBRATE` needs an accelerometer (ADXL345). Current `[input_shaper]` values in `printer.cfg` were copied from a different printer/frame — redo this calibration on the actual hardware.
+Needs ADXL345 (USB RP2040 board). Current `[input_shaper]` in `printer.cfg` copied from different printer — redo on actual hardware.
+Board source: https://mellow-3d.github.io/fly_adxl345_usb_klipper_usb.html
 
-### Setup
+```
+# 1. compile firmware
+cd ~/klipper
+make clean KCONFIG_CONFIG=config.adxl345
+make menuconfig KCONFIG_CONFIG=config.adxl345
+# set: extra low-level config options [*], Architecture=RP2040,
+# bootloader=16KiB, interface=USB, set USB ids
+make KCONFIG_CONFIG=config.adxl345 -j4
 
-1. Enable SPI:
-   ```
-   ssh rpi "sudo raspi-config nonint do_spi 0"
-   ```
-   Reboot after.
+# 2. flash
+ls /dev/serial/by-id/   # note id containing 'rp2040'
+make KCONFIG_CONFIG=config.adxl345 flash FLASH_DEVICE=/dev/serial/by-id/<your rp2040 id>
 
-2. Wire ADXL345 to Pi SPI0 (CE0/MOSI/MISO/SCLK + 3.3V/GND), mount rigid on toolhead.
+# 3. printer.cfg: set [mcu adxl345] serial to id from step 2
+#    verify cs_pin / spi_software_*_pin against board's own pin diagram
+FIRMWARE_RESTART
 
-3. Add to `printer.cfg`:
-   ```
-   [mcu rpi]
-   serial: /tmp/klipper_host_mcu
+# 4. test
+ACCELEROMETER_MEASURE CHIP=adxl345   # run, wait few sec, run again to stop; confirm non-zero data
+MEASURE_AXES_NOISE                   # printer idle
 
-   [adxl345]
-   cs_pin: rpi:None
-   axes_map: z,y,x    # verify for your mount orientation
+# 5. calibrate
+SHAPER_CALIBRATE AXIS=X
+SHAPER_CALIBRATE AXIS=Y
+# generates /tmp/calibration_data_{x,y}_*.csv
 
-   [resonance_tester]
-   accel_chip: adxl345
-   probe_points:
-       115,115,20     # bed center, adjust to your bed size
-   ```
+# 6. graph on host PC, not Pi
+scp 'rpi:/tmp/calibration_data_*_*.csv' .
+pip install -v numpy matplotlib   # once
+python3 calibrate_shaper.py calibration_data_x_*.csv -o shaper_x.png
+python3 calibrate_shaper.py calibration_data_y_*.csv -o shaper_y.png
+# calibrate_shaper.py: ~/klipper/scripts/ — copy/clone to host PC
 
-4. Install graph deps on Pi:
-   ```
-   ssh rpi "~/klippy-env/bin/pip install -v numpy matplotlib"
-   ```
-
-5. `FIRMWARE_RESTART` to load config.
-
-### Calibrate
-
-6. Test accel wiring:
-   ```
-   ACCELEROMETER_MEASURE CHIP=adxl345
-   ```
-   Wait few sec, run again to stop. Confirm non-zero data, no error.
-
-7. Noise floor check (printer idle):
-   ```
-   MEASURE_AXES_NOISE
-   ```
-
-8. Run calibration:
-   ```
-   SHAPER_CALIBRATE AXIS=X
-   SHAPER_CALIBRATE AXIS=Y
-   ```
-   Toolhead moves/vibrates, keep area clear. Generates `/tmp/calibration_data_x_*.csv` / `_y_*.csv`.
-
-9. Graph results:
-   ```
-   ~/klipper/scripts/calibrate_shaper.py /tmp/calibration_data_x_*.csv -o /tmp/shaper_x.png
-   ```
-   Repeat for Y. Read recommended shaper type/freq/max_accel.
-
-10. Apply: `SAVE_CONFIG` (auto-writes `[input_shaper]`) or manually edit the `[input_shaper]` section in `printer.cfg`.
-
-11. `FIRMWARE_RESTART` to load final values.
+# 7. apply
+SAVE_CONFIG   # auto-writes [input_shaper], or edit printer.cfg manually
+FIRMWARE_RESTART
+```
