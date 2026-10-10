@@ -19,3 +19,69 @@ Also verify `[mcu] serial` matches the actual device on your machine (`ls /dev/s
 ## Note on hotend upgrade
 
 `printer.cfg` still has `[extruder] max_temp: 260`, left over from the stock hotend. Review and raise to match the 300°C-rated hotend's actual safe limit before relying on higher-temperature filaments.
+
+## Shaper calibration
+
+`SHAPER_CALIBRATE` needs an accelerometer (ADXL345). Current `[input_shaper]` values in `printer.cfg` were copied from a different printer/frame — redo this calibration on the actual hardware.
+
+### Setup
+
+1. Enable SPI:
+   ```
+   ssh rpi "sudo raspi-config nonint do_spi 0"
+   ```
+   Reboot after.
+
+2. Wire ADXL345 to Pi SPI0 (CE0/MOSI/MISO/SCLK + 3.3V/GND), mount rigid on toolhead.
+
+3. Add to `printer.cfg`:
+   ```
+   [mcu rpi]
+   serial: /tmp/klipper_host_mcu
+
+   [adxl345]
+   cs_pin: rpi:None
+   axes_map: z,y,x    # verify for your mount orientation
+
+   [resonance_tester]
+   accel_chip: adxl345
+   probe_points:
+       115,115,20     # bed center, adjust to your bed size
+   ```
+
+4. Install graph deps on Pi:
+   ```
+   ssh rpi "~/klippy-env/bin/pip install -v numpy matplotlib"
+   ```
+
+5. `FIRMWARE_RESTART` to load config.
+
+### Calibrate
+
+6. Test accel wiring:
+   ```
+   ACCELEROMETER_MEASURE CHIP=adxl345
+   ```
+   Wait few sec, run again to stop. Confirm non-zero data, no error.
+
+7. Noise floor check (printer idle):
+   ```
+   MEASURE_AXES_NOISE
+   ```
+
+8. Run calibration:
+   ```
+   SHAPER_CALIBRATE AXIS=X
+   SHAPER_CALIBRATE AXIS=Y
+   ```
+   Toolhead moves/vibrates, keep area clear. Generates `/tmp/calibration_data_x_*.csv` / `_y_*.csv`.
+
+9. Graph results:
+   ```
+   ~/klipper/scripts/calibrate_shaper.py /tmp/calibration_data_x_*.csv -o /tmp/shaper_x.png
+   ```
+   Repeat for Y. Read recommended shaper type/freq/max_accel.
+
+10. Apply: `SAVE_CONFIG` (auto-writes `[input_shaper]`) or manually edit the `[input_shaper]` section in `printer.cfg`.
+
+11. `FIRMWARE_RESTART` to load final values.
